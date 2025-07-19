@@ -1,0 +1,62 @@
+{
+  "name": "Workflow Teste Kiro",
+  "nodes": [
+    {
+      "id": "webhook_trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kiro-test",
+        "responseMode": "lastNode",
+        "responseData": "allEntries"
+      }
+    },
+    {
+      "id": "process_data",
+      "name": "Processar Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "// Processar dados recebidos\nconst inputData = $input.first().json;\n\nconst result = {\n  timestamp: new Date().toISOString(),\n  received: inputData,\n  processed: true,\n  message: 'Workflow executado com sucesso pelo Kiro!'\n};\n\nreturn [{ json: result }];"
+      }
+    },
+    {
+      "id": "final_response",
+      "name": "Resposta Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "parameters": {
+        "jsCode": "// Preparar resposta final\nconst data = $input.first().json;\n\nreturn [{\n  json: {\n    status: 'success',\n    workflow: 'Workflow Teste Kiro',\n    data: data,\n    created_by: 'Kiro AI Assistant'\n  }\n}];"
+      }
+    }
+  ],
+  "connections": {
+    "webhook_trigger": {
+      "main": [
+        [
+          {
+            "node": "process_data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "process_data": {
+      "main": [
+        [
+          {
+            "node": "final_response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "name": "Simple Real Estate Scraper",
+  "nodes": [
+    {
+      "id": "webhook_trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "real-estate-scraper",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "validate_input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nif (!input.url) {\n  throw new Error('URL is required');\n}\n\nlet url = input.url;\nif (!url.startsWith('http')) {\n  url = 'https://' + url;\n}\n\nreturn [{\n  json: {\n    url: url,\n    property_type: input.property_type || 'all',\n    max_pages: Math.min(input.max_pages || 5, 10)\n  }\n}];"
+      }
+    },
+    {
+      "id": "firecrawl_scrape",
+      "name": "Firecrawl Scrape",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "parameters": {
+        "url": "https://api.firecrawl.dev/v1/scrape",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.FIRECRAWL_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "{\n  \"url\": \"{{ $json.url }}\",\n  \"pageOptions\": {\n    \"onlyMainContent\": true\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "extract_properties",
+      "name": "Extract Properties",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [900, 300],
+      "parameters": {
+        "text": "{{ $json.data.content }}",
+        "schemaType": "fromAttributes",
+        "attributes": {
+          "attributes": [
+            {
+              "attribute": "properties",
+              "type": "array",
+              "description": "List of real estate properties found on the page"
+            },
+            {
+              "attribute": "title",
+              "type": "string",
+              "description": "Property title or name"
+            },
+            {
+              "attribute": "price",
+              "type": "string",
+              "description": "Property price"
+      "po          },
+            {
+              "attribute": "location",
+              "type": "string",
+              "description": "Property location or address"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "format_output",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "const extracted = $input.first().json;\nconst originalUrl = $('Validate Input').item.json.url;\n\nconst result = {\n  status: 'success',\n  url_scraped: originalUrl,\n  timestamp: new Date().toISOString(),\n  data: extracted,\n  message: 'Real estate data extracted successfully'\n};\n\nreturn [{ json: result }];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl Scrape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl Scrape": {
+      "main": [
+        [
+          {
+            "node": "Extract Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Properties": {
+      "main": [
+        [
+          {
+            "node": "Format Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

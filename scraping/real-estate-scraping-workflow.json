@@ -1,0 +1,575 @@
+{
+  "name": "Real Estate Scraping Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "start-scraping",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "start-scraping"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Você é um agente especializado em mapeamento de sites imobiliários. Sua tarefa é descobrir todas as URLs internas válidas do site fornecido.\n\nSite para mapear: {{ $json.site_url }}\nTipo de imóvel: {{ $json.property_type || 'todos' }}\n\nUse a ferramenta Firecrawl para:\n1. Fazer crawling do site principal\n2. Identificar todas as URLs internas relacionadas a imóveis\n3. Filtrar URLs que contenham padrões como: /imovel/, /casa/, /apartamento/, /venda/, /aluguel/\n4. Retornar uma lista estruturada de URLs válidas\n\nRetorne o resultado em formato JSON com a estrutura:\n{\n  \"urls_encontradas\": [\"url1\", \"url2\", ...],\n  \"total_urls\": number,\n  \"site_mapeado\": \"url_do_site\"\n}",
+        "hasOutputParser": true,
+        "outputParser": {
+          "type": "structured",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "urls_encontradas": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "total_urls": {
+                "type": "number"
+              },
+              "site_mapeado": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "id": "agent-mapeamento",
+      "name": "Agente de Mapeamento",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.firecrawl.dev/v1/crawl",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.FIRECRAWL_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonParameters": {
+          "url": "{{ $json.site_url }}",
+          "crawlerOptions": {
+            "includes": ["**/imovel/**", "**/casa/**", "**/apartamento/**", "**/venda/**", "**/aluguel/**"],
+            "limit": 100,
+            "maxDepth": 3
+          },
+          "pageOptions": {
+            "onlyMainContent": true,
+            "includeHtml": false,
+            "includeRawHtml": false
+          }
+        }
+      },
+      "id": "firecrawl-mapping",
+      "name": "Firecrawl - Mapeamento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    }
+  ]
+},
+
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Processar resultado do Firecrawl e extrair URLs\nconst firecrawlResult = $input.all()[0].json;\nconst urls = [];\n\nif (firecrawlResult.data && Array.isArray(firecrawlResult.data)) {\n  firecrawlResult.data.forEach(page => {\n    if (page.metadata && page.metadata.sourceURL) {\n      urls.push(page.metadata.sourceURL);\n    }\n  });\n}\n\n// Filtrar URLs duplicadas\nconst uniqueUrls = [...new Set(urls)];\n\nreturn uniqueUrls.map(url => ({ url: url }));"
+      },
+      "id": "process-mapping-results",
+      "name": "Processar URLs Mapeadas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Você é um agente especializado em filtragem de URLs de imóveis. Sua tarefa é analisar as URLs fornecidas e selecionar apenas aquelas que correspondem ao tipo de imóvel solicitado.\n\nTipo de imóvel desejado: {{ $('Webhook Trigger').item.json.property_type || 'todos' }}\nURL para analisar: {{ $json.url }}\n\nCritérios de filtragem:\n- Para 'casa': URLs que contenham 'casa', 'sobrado', 'térrea'\n- Para 'apartamento': URLs que contenham 'apartamento', 'apto', 'flat', 'studio'\n- Para 'cobertura': URLs que contenham 'cobertura', 'penthouse'\n- Para 'terreno': URLs que contenham 'terreno', 'lote', 'área'\n- Para 'todos': aceitar qualquer tipo de imóvel\n\nAnalise a URL e determine se ela corresponde ao tipo solicitado.\n\nRetorne o resultado em formato JSON:\n{\n  \"url_valida\": true/false,\n  \"url\": \"url_analisada\",\n  \"tipo_identificado\": \"tipo_do_imovel\",\n  \"motivo\": \"razão_da_decisão\"\n}",
+        "hasOutputParser": true,
+        "outputParser": {
+          "type": "structured",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "url_valida": {
+                "type": "boolean"
+              },
+              "url": {
+                "type": "string"
+              },
+              "tipo_identificado": {
+                "type": "string"
+              },
+              "motivo": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "id": "agent-filtragem",
+      "name": "Agente de Filtragem",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Filtrar apenas URLs válidas\nconst items = $input.all();\nconst validUrls = items.filter(item => item.json.url_valida === true);\n\nreturn validUrls.map(item => ({ url: item.json.url, tipo: item.json.tipo_identificado }));"
+      },
+      "id": "filter-valid-urls",
+      "name": "Filtrar URLs Válidas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 5,
+        "options": {}
+      },
+      "id": "split-urls-batch",
+      "name": "Dividir URLs em Lotes",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Você é um agente especializado em extração de dados de imóveis. Sua tarefa é visitar a URL fornecida e extrair dados estruturados do anúncio.\n\nURL para extrair: {{ $json.url }}\n\nUse a ferramenta Firecrawl para:\n1. Fazer scraping da página do imóvel\n2. Extrair as seguintes informações:\n   - Título do anúncio\n   - Preço (valor numérico limpo)\n   - Endereço completo\n   - Bairro\n   - Cidade\n   - Área/metragem\n   - Número de quartos\n   - Número de banheiros\n   - Número de vagas de garagem\n   - Descrição resumida\n   - Características principais\n   - Link da página\n\nRetorne o resultado em formato JSON estruturado:\n{\n  \"titulo\": \"string\",\n  \"preco\": number,\n  \"endereco\": \"string\",\n  \"bairro\": \"string\",\n  \"cidade\": \"string\",\n  \"area_m2\": number,\n  \"quartos\": number,\n  \"banheiros\": number,\n  \"vagas\": number,\n  \"descricao\": \"string\",\n  \"caracteristicas\": [\"string\"],\n  \"link\": \"string\",\n  \"tipo_imovel\": \"string\"\n}",
+        "hasOutputParser": true,
+        "outputParser": {
+          "type": "structured",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "titulo": { "type": "string" },
+              "preco": { "type": "number" },
+              "endereco": { "type": "string" },
+              "bairro": { "type": "string" },
+              "cidade": { "type": "string" },
+              "area_m2": { "type": "number" },
+              "quartos": { "type": "number" },
+              "banheiros": { "type": "number" },
+              "vagas": { "type": "number" },
+              "descricao": { "type": "string" },
+              "caracteristicas": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "link": { "type": "string" },
+              "tipo_imovel": { "type": "string" }
+            }
+          }
+        }
+      },
+      "id": "agent-extracao",
+      "name": "Agente de Extração",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.firecrawl.dev/v1/scrape",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.FIRECRAWL_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonParameters": {
+          "url": "{{ $json.url }}",
+          "pageOptions": {
+            "onlyMainContent": true,
+            "includeHtml": false,
+            "includeRawHtml": false
+          },
+          "extractorOptions": {
+            "mode": "llm-extraction",
+            "extractionPrompt": "Extraia todas as informações do imóvel: título, preço, endereço, bairro, área, quartos, banheiros, vagas, características e descrição."
+          }
+        }
+      },
+      "id": "firecrawl-extraction",
+      "name": "Firecrawl - Extração",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "text": "{{ $json.data.content }}",
+        "schemaType": "fromAttributes",
+        "attributes": {
+          "attributes": [
+            {
+              "attribute": "titulo",
+              "type": "string",
+              "description": "Título do anúncio do imóvel"
+            },
+            {
+              "attribute": "preco",
+              "type": "number", 
+              "description": "Preço do imóvel em reais (apenas números)"
+            },
+            {
+              "attribute": "endereco",
+              "type": "string",
+              "description": "Endereço completo do imóvel"
+            },
+            {
+              "attribute": "bairro",
+              "type": "string",
+              "description": "Bairro onde está localizado o imóvel"
+            },
+            {
+              "attribute": "cidade",
+              "type": "string",
+              "description": "Cidade onde está localizado o imóvel"
+            },
+            {
+              "attribute": "area_m2",
+              "type": "number",
+              "description": "Área do imóvel em metros quadrados"
+            },
+            {
+              "attribute": "quartos",
+              "type": "number",
+              "description": "Número de quartos"
+            },
+            {
+              "attribute": "banheiros",
+              "type": "number",
+              "description": "Número de banheiros"
+            },
+            {
+              "attribute": "vagas",
+              "type": "number",
+              "description": "Número de vagas de garagem"
+            }
+          ]
+        }
+      },
+      "id": "information-extractor",
+      "name": "Extrator de Informações",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [2220, 300]
+    }
+  ]
+},
+    {
+
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Combinar dados extraídos com URL original\nconst extractedData = $input.first().json;\nconst originalUrl = $('Dividir URLs em Lotes').item.json.url;\n\nreturn [{\n  ...extractedData,\n  link: originalUrl,\n  data_extracao: new Date().toISOString()\n}];"
+      },
+      "id": "combine-extraction-data",
+      "name": "Combinar Dados Extraídos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2440, 300]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Você é um agente especializado em processamento final de dados imobiliários. Sua tarefa é organizar todos os registros coletados e gerar os arquivos finais.\n\nDados recebidos: {{ JSON.stringify($input.all().map(item => item.json)) }}\n\nTarefas:\n1. Validar e limpar os dados (remover registros incompletos ou inválidos)\n2. Padronizar formatos (preços, áreas, etc.)\n3. Ordenar por preço crescente\n4. Gerar estrutura JSON final\n5. Preparar dados para CSV\n\nRetorne o resultado em formato JSON:\n{\n  \"total_imoveis\": number,\n  \"imoveis_ordenados\": [\n    {\n      \"titulo\": \"string\",\n      \"preco\": number,\n      \"endereco\": \"string\",\n      \"bairro\": \"string\",\n      \"cidade\": \"string\",\n      \"area_m2\": number,\n      \"quartos\": number,\n      \"banheiros\": number,\n      \"vagas\": number,\n      \"link\": \"string\",\n      \"tipo_imovel\": \"string\"\n    }\n  ],\n  \"estatisticas\": {\n    \"preco_medio\": number,\n    \"preco_minimo\": number,\n    \"preco_maximo\": number,\n    \"area_media\": number\n  }\n}",
+        "hasOutputParser": true,
+        "outputParser": {
+          "type": "structured",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "total_imoveis": { "type": "number" },
+              "imoveis_ordenados": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "titulo": { "type": "string" },
+                    "preco": { "type": "number" },
+                    "endereco": { "type": "string" },
+                    "bairro": { "type": "string" },
+                    "cidade": { "type": "string" },
+                    "area_m2": { "type": "number" },
+                    "quartos": { "type": "number" },
+                    "banheiros": { "type": "number" },
+                    "vagas": { "type": "number" },
+                    "link": { "type": "string" },
+                    "tipo_imovel": { "type": "string" }
+                  }
+                }
+              },
+              "estatisticas": {
+                "type": "object",
+                "properties": {
+                  "preco_medio": { "type": "number" },
+                  "preco_minimo": { "type": "number" },
+                  "preco_maximo": { "type": "number" },
+                  "area_media": { "type": "number" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "id": "agent-processamento-final",
+      "name": "Agente de Processamento Final",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [2660, 300]
+    },
+    {
+      "parameters": {
+        "type": "simple",
+        "sortFieldsUi": {
+          "sortField": [
+            {
+              "fieldName": "preco",
+              "order": "ascending"
+            }
+          ]
+        }
+      },
+      "id": "sort-by-price",
+      "name": "Ordenar por Preço",
+      "type": "n8n-nodes-base.sort",
+      "typeVersion": 1,
+      "position": [2880, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Gerar JSON final ordenado\nconst items = $input.all();\nconst imoveis = items.map(item => item.json);\n\n// Calcular estatísticas\nconst precos = imoveis.map(i => i.preco || 0).filter(p => p > 0);\nconst areas = imoveis.map(i => i.area_m2 || 0).filter(a => a > 0);\n\nconst estatisticas = {\n  preco_medio: precos.length > 0 ? Math.round(precos.reduce((a, b) => a + b, 0) / precos.length) : 0,\n  preco_minimo: precos.length > 0 ? Math.min(...precos) : 0,\n  preco_maximo: precos.length > 0 ? Math.max(...precos) : 0,\n  area_media: areas.length > 0 ? Math.round(areas.reduce((a, b) => a + b, 0) / areas.length) : 0\n};\n\nconst resultado = {\n  total_imoveis: imoveis.length,\n  data_processamento: new Date().toISOString(),\n  imoveis_ordenados: imoveis,\n  estatisticas: estatisticas\n};\n\nreturn [resultado];"
+      },
+      "id": "generate-final-json",
+      "name": "Gerar JSON Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3100, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Converter para formato CSV\nconst data = $input.first().json;\nconst imoveis = data.imoveis_ordenados;\n\nif (!imoveis || imoveis.length === 0) {\n  return [{ csv: 'Nenhum imóvel encontrado' }];\n}\n\n// Cabeçalho CSV\nconst headers = [\n  'Título',\n  'Preço (R$)',\n  'Endereço',\n  'Bairro', \n  'Cidade',\n  'Área (m²)',\n  'Quartos',\n  'Banheiros',\n  'Vagas',\n  'Tipo',\n  'Link'\n];\n\n// Função para escapar campos CSV\nfunction escapeCsv(field) {\n  if (field === null || field === undefined) return '';\n  const str = String(field);\n  if (str.includes(',') || str.includes('\"') || str.includes('\\n')) {\n    return '\"' + str.replace(/\"/g, '\"\"') + '\"';\n  }\n  return str;\n}\n\n// Gerar linhas CSV\nconst csvLines = [headers.join(',')];\n\nimoveis.forEach(imovel => {\n  const row = [\n    escapeCsv(imovel.titulo || ''),\n    escapeCsv(imovel.preco || 0),\n    escapeCsv(imovel.endereco || ''),\n    escapeCsv(imovel.bairro || ''),\n    escapeCsv(imovel.cidade || ''),\n    escapeCsv(imovel.area_m2 || 0),\n    escapeCsv(imovel.quartos || 0),\n    escapeCsv(imovel.banheiros || 0),\n    escapeCsv(imovel.vagas || 0),\n    escapeCsv(imovel.tipo_imovel || ''),\n    escapeCsv(imovel.link || '')\n  ];\n  csvLines.push(row.join(','));\n});\n\nconst csvContent = csvLines.join('\\n');\n\nreturn [{\n  csv: csvContent,\n  filename: `imoveis_${new Date().toISOString().split('T')[0]}.csv`,\n  total_registros: imoveis.length\n}];"
+      },
+      "id": "generate-csv",
+      "name": "Gerar CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3320, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"status\": \"sucesso\",\n  \"message\": \"Scraping concluído com sucesso\",\n  \"total_imoveis\": {{ $('Gerar JSON Final').item.json.total_imoveis }},\n  \"estatisticas\": {{ JSON.stringify($('Gerar JSON Final').item.json.estatisticas) }},\n  \"arquivos_gerados\": {\n    \"json\": \"dados_completos.json\",\n    \"csv\": \"{{ $('Gerar CSV').item.json.filename }}\"\n  },\n  \"dados\": {{ JSON.stringify($('Gerar JSON Final').item.json) }}\n}",
+        "options": {}
+      },
+      "id": "webhook-response",
+      "name": "Resposta Final",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3540, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl - Mapeamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl - Mapeamento": {
+      "main": [
+        [
+          {
+            "node": "Processar URLs Mapeadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar URLs Mapeadas": {
+      "main": [
+        [
+          {
+            "node": "Agente de Filtragem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente de Filtragem": {
+      "main": [
+        [
+          {
+            "node": "Filtrar URLs Válidas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar URLs Válidas": {
+      "main": [
+        [
+          {
+            "node": "Dividir URLs em Lotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dividir URLs em Lotes": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl - Extração",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl - Extração": {
+      "main": [
+        [
+          {
+            "node": "Extrator de Informações",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrator de Informações": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados Extraídos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combinar Dados Extraídos": {
+      "main": [
+        [
+          {
+            "node": "Dividir URLs em Lotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dividir URLs em Lotes": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Ordenar por Preço",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ordenar por Preço": {
+      "main": [
+        [
+          {
+            "node": "Gerar JSON Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar JSON Final": {
+      "main": [
+        [
+          {
+            "node": "Gerar CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar CSV": {
+      "main": [
+        [
+          {
+            "node": "Resposta Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {},
+  "tags": [
+    {
+      "createdAt": "2025-01-19T00:00:00.000Z",
+      "updatedAt": "2025-01-19T00:00:00.000Z",
+      "id": "scraping",
+      "name": "scraping"
+    },
+    {
+      "createdAt": "2025-01-19T00:00:00.000Z", 
+      "updatedAt": "2025-01-19T00:00:00.000Z",
+      "id": "real-estate",
+      "name": "real-estate"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-19T00:00:00.000Z",
+  "versionId": "1"
+}

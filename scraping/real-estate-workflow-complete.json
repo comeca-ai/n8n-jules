@@ -1,0 +1,248 @@
+{
+  "name": "Real Estate Scraping Pipeline - Complete",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "real-estate-scraping",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "webhook_trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.firecrawl.dev/v1/crawl",
+        "method": "POST",
+        "sendHeaders": true,
+        "he": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "// Validar dados de entrada\nconst input = $input.first().json;\n\n// Validações obrigatórias\nif (!input.site_url) {\n  throw new Error('site_url é obrigatório');\n}\n\n// Normalizar URL\nlet siteUrl = input.site_url;\nif (!siteUrl.startsWith('http')) {\n  siteUrl = 'https://' + siteUrl;\n}\n\n// Configurações padrão\nconst config = {\n  site_url: siteUrl,\n  property_type: input.property_type || 'todos',\n  max_pages: Math.min(input.max_pages || 10, 50), // Limite máximo\n  max_depth: Math.min(input.max_depth || 3, 5),\n  batch_size: Math.min(input.batch_size || 5, 10)\n};\n\nreturn [{ json: config }];"
+      }
+    },
+    {
+      "id": "firecrawl-mapping",
+      "name": "Firecrawl - Mapeamento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "parameters": {
+        "url": "https://api.firecrawl.dev/v1/crawl",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.FIRECRAWL_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "{\n  \"url\": \"{{ $json.site_url }}\",\n  \"crawlerOptions\": {\n    \"includes\": [\n      \"**/imovel/**\",\n      \"**/casa/**\",\n      \"**/apartamento/**\",\n      \"**/venda/**\",\n      \"**/aluguel/**\",\n      \"**/propriedade/**\",\n      \"**/listing/**\"\n    ],\n    \"excludes\": [\n      \"**/admin/**\",\n      \"**/login/**\",\n      \"**/api/**\"\n    ],\n    \"limit\": {{ $json.max_pages }},\n    \"maxDepth\": {{ $json.max_depth }}\n  },\n  \"pageOptions\": {\n    \"onlyMainContent\": true,\n    \"includeHtml\": false,\n    \"includeRawHtml\": false\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "wait-crawl",
+      "name": "Aguardar Crawling",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [900, 300],
+      "parameters": {
+        "amount": 60,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "get-crawl-results",
+      "name": "Obter Resultados do Crawling",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "parameters": {
+        "url": "https://api.firecrawl.dev/v1/crawl/{{ $('Firecrawl - Mapeamento').item.json.id }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.FIRECRAWL_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "process-urls",
+      "name": "Processar URLs Encontradas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300],
+      "parameters": {
+        "jsCode": "// Processar resultado do Firecrawl\nconst crawlResult = $input.first().json;\nconst propertyType = $('Validar Entrada').item.json.property_type;\n\nif (!crawlResult.data || !Array.isArray(crawlResult.data)) {\n  return [{ json: { urls: [], total: 0, message: 'Nenhum dado encontrado' } }];\n}\n\n// Extrair URLs e filtrar por tipo de imóvel\nconst urls = [];\nconst typeFilters = {\n  'casa': ['casa', 'sobrado', 'terrea', 'house'],\n  'apartamento': ['apartamento', 'apto', 'flat', 'studio'],\n  'cobertura': ['cobertura', 'penthouse'],\n  'terreno': ['terreno', 'lote', 'area', 'land']\n};\n\ncrawlResult.data.forEach(page => {\n  if (page.metadata && page.metadata.sourceURL) {\n    const url = page.metadata.sourceURL;\n    const urlLower = url.toLowerCase();\n    \n    // Filtrar por tipo se especificado\n    if (propertyType === 'todos') {\n      urls.push({\n        url: url,\n        title: page.metadata.title || '',\n        content: page.content || '',\n        tipo_identificado: 'geral'\n      });\n    } else if (typeFilters[propertyType]) {\n      const matchesType = typeFilters[propertyType].some(keyword => \n        urlLower.includes(keyword)\n      );\n      \n      if (matchesType) {\n        urls.push({\n          url: url,\n          title: page.metadata.title || '',\n          content: page.content || '',\n          tipo_identificado: propertyType\n        });\n      }\n    }\n  }\n});\n\n// Remover duplicatas\nconst uniqueUrls = urls.filter((url, index, self) => \n  index === self.findIndex(u => u.url === url.url)\n);\n\nreturn uniqueUrls.map(urlData => ({ json: urlData }));"
+      }
+    },
+    {
+      "id": "split-batches",
+      "name": "Dividir em Lotes",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1560, 300],
+      "parameters": {
+        "batchSize": "={{ $('Validar Entrada').item.json.batch_size }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "extract-property-data",
+      "name": "Extrair Dados do Imóvel",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [1780, 300],
+      "parameters": {
+        "text": "{{ $json.content }}",
+        "schemaType": "fromAttributes",
+        "attributes": {
+          "attributes": [
+            {
+              "attribute": "titulo",
+              "type": "string",
+              "description": "Título do anúncio do imóvel"
+            },
+            {
+              "attribute": "preco",
+              "type": "number",
+              "description": "Preço do imóvel em reais (apenas números, sem símbolos)"
+            },
+            {
+              "attribute": "endereco",
+              "type": "string",
+              "description": "Endereço completo do imóvel"
+            },
+            {
+              "attribute": "bairro",
+              "type": "string",
+              "description": "Bairro onde está localizado o imóvel"
+            },
+            {
+              "attribute": "cidade",
+              "type": "string",
+              "description": "Cidade onde está localizado o imóvel"
+            },
+            {
+              "attribute": "area_m2",
+              "type": "number",
+              "description": "Área do imóvel em metros quadrados"
+            },
+            {
+              "attribute": "quartos",
+              "type": "number",
+              "description": "Número de quartos"
+            },
+            {
+              "attribute": "banheiros",
+              "type": "number",
+              "description": "Número de banheiros"
+            },
+            {
+              "attribute": "vagas",
+              "type": "number",
+              "description": "Número de vagas de garagem"
+            },
+            {
+              "attribute": "descricao",
+              "type": "string",
+              "description": "Descrição resumida do imóvel"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "combine-data",
+      "name": "Combinar Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300],
+      "parameters": {
+        "jsCode": "// Combinar dados extraídos com informações originais\nconst extractedData = $input.first().json;\nconst originalData = $('Dividir em Lotes').item.json;\n\n// Limpar e validar dados\nconst cleanData = {\n  titulo: extractedData.titulo || originalData.title || 'Título não encontrado',\n  preco: parseFloat(extractedData.preco) || 0,\n  endereco: extractedData.endereco || 'Endereço não informado',\n  bairro: extractedData.bairro || '',\n  cidade: extractedData.cidade || '',\n  area_m2: parseFloa  for (const [type, keywords] of Object.entries(filters)) {\n    if (keywords.some(keyword => url.toLowerCase().includes(keyword))) {\n      detectedType = type;\n      break;\n    }\n  }\n} else if (filters[propertyType]) {\n  const keywords = filters[propertyType];\n  isValid = keywords.some(keyword => url.toLowerCase().includes(keyword));\n  if (isValid) {\n    detectedType = propertyType;\n    reason = `URL contém palavra-chave para ${propertyType}`;\n  }\n}\n\nreturn [{\n  url_valida: isValid,\n  url: url,\n  tipo_identificado: detectedType,\n  motivo: reason\n}];"
+      },
+      "id": "agent_filtering",
+      "name": "3. Agente de Filtragem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filtrar apenas URLs válidas\nconst items = $input.all();\nconst validUrls = items.filter(item => item.json.url_valida === true);\n\nconsole.log(`Filtered ${validUrls.length} valid URLs from ${items.length} total`);\n\nif (validUrls.length === 0) {\n  throw new Error('Nenhuma URL válida encontrada após filtragem');\n}\n\nreturn validUrls.map(item => ({ \n  url: item.json.url, \n  tipo: item.json.tipo_identificado \n}));"
+      },
+      "id": "filter_valid_urls",
+      "name": "4. Filtrar URLs Válidas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 3,
+        "options": {}
+      },
+      "id": "split_batches",
+      "name": "5. Dividir em Lotes",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.firecrawl.dev/v1/scrape",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.FIRECRAWL_API_KEY || 'fc-your-api-key' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "{\n  \"url\": \"{{ $json.url }}\",\n  \"pageOptions\": {\n    \"onlyMainContent\": true,\n    \"includeHtml\": false\n  },\n  \"extractorOptions\": {\n    \"mode\": \"llm-extraction\",\n    \"extractionPrompt\": \"Extraia as seguintes informações do imóvel: título, preço em reais, endereço, bairro, cidade, área em m², número de quartos, banheiros, vagas de garagem, e características principais.\"\n  }\n}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "firecrawl_extraction",
+      "name": "6. Firecrawl - Extração",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Agente de Extração - Processar dados extraídos\nconst firecrawlData = $inp
