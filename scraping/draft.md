@@ -10,3 +10,5 @@ Preciso coletar todos os imoveis anunciados em um portal a partir da url. Vamos 
 4. Agente de Processamento Final  
    • Organizar todos os registros em JSON ordenado por preço crescente  
    • Gerar também um CSV com cabeçalho (UTF‑8) contendo os mesmos campos.} e as ferramentas do firecrwal para cada fase e {anexo} faca a sugestao dos prompts, portanto do worfklow para atingirmos o objetivo no n8n use a documentacao e guidelines que voce conhece.
+
+   Objetivo final: Workflow implantando e funcional no n8n
